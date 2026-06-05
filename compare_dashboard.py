@@ -4,11 +4,17 @@ from openai import OpenAI
 import re
 import plotly.express as px
 import plotly.graph_objects as go
+import os
 
 # =================================================================
 # 0. API 설정
 # =================================================================
+# Streamlit Secrets 또는 환경변수에서 API 키 로드 (GitHub에 노출되지 않음)
 API_KEY = os.environ.get("OPENAI_API_KEY", "")
+if not API_KEY:
+    st.error("❌ OpenAI API 키가 설정되지 않았습니다.\n\nStreamlit Cloud Secrets에 OPENAI_API_KEY를 입력해주세요.")
+    st.stop()
+
 client = OpenAI(api_key=API_KEY)
 
 # =================================================================
