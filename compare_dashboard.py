@@ -293,20 +293,42 @@ def build_keyword_matrix(df, kw_dict, normalize=True):
 # 8. 메인 화면
 # =================================================================
 st.title("🆚 크림 Top 10 리뷰 비교 분석 대시보드")
-st.caption("제품별 리뷰 CSV를 여러 개 올리면 자동으로 비교 분석합니다.")
+st.caption("올리브영 크림 카테고리 Top 10 제품의 리뷰 데이터를 자동으로 비교 분석합니다.")
 
-uploaded_files = st.file_uploader(
-    "제품별 리뷰 CSV 업로드 (여러 개 선택 가능, 최대 10개 권장)",
-    type="csv",
-    accept_multiple_files=True
-)
+# --- GitHub 저장소에서 CSV 자동 로드 ---
+CSV_FILES = [
+    "VT 피디알엔 캡슐 크림 100.csv",
+    "라로슈포제시카플라스트 밤 B+.csv",
+    "바이오힐보 프로바이오덤 3D 리프팅 크림.csv",
+    "아누아 피디알엔 히알루론산 100 수분 크림.csv",
+    "에스네이처 아쿠아 스쿠알란 수분크림.csv",
+    "에스네이처 아쿠아 오아시스 수분 젤크림.csv",
+    "에스트라 아토베리어 365크림.csv",
+    "제로이드 수딩 크림.csv",
+    "토리든 다이브인 히알루론산 수딩 크림.csv",
+    "피지오겔 DMT 페이셜 크림.csv",
+]
 
-if not uploaded_files:
-    st.info("제품별 리뷰 CSV 파일들을 업로드해주세요.")
-    st.stop()
+@st.cache_data
+def load_all_csv():
+    frames = []
+    for filename in CSV_FILES:
+        try:
+            one_df = pd.read_csv(filename)
+            one_df = one_df.drop_duplicates(subset=['content'], keep='first').copy()
+            one_df['product'] = filename.replace('.csv', '')
+            frames.append(one_df)
+        except FileNotFoundError:
+            st.warning(f"⚠️ 파일을 찾을 수 없습니다: {filename}")
+    if not frames:
+        st.error("❌ 데이터 파일을 불러올 수 없습니다. GitHub에 CSV 파일이 있는지 확인해주세요.")
+        st.stop()
+    merged = pd.concat(frames, ignore_index=True)
+    merged['rating'] = pd.to_numeric(merged['rating'], errors='coerce')
+    return merged
 
 # --- 데이터 통합 ---
-df = load_and_merge(uploaded_files)
+df = load_all_csv()
 trouble_df = make_trouble_df(df)
 product_list = sorted(df['product'].unique())
 summary = build_summary_table(df)  # Step3 이후 탭들도 사용하므로 전역에서 한 번만 계산
@@ -776,30 +798,13 @@ with tab_detail:
     # ═══════════════════════════════════════════
     st.markdown("---")
     st.subheader("📌 1. 제품 개요")
-    # 총 리뷰 수 직접 기입란 (올리브영 제품 페이지에서 확인 후 입력)
-    # ↓↓↓ 제품별 총 리뷰 수를 아래 딕셔너리에 직접 기입해주세요 ↓↓↓
-    TOTAL_REVIEW_COUNT = {
-        # "제품명(파일명과 동일하게)": 총리뷰수,
-        # 예시:
-        # "에스네이처 리얼 알로에 수분크림": 12500,
-        # "닥터지 레드 블레미쉬 크림": 8300,
-    }
-    # ↑↑↑ 여기까지 기입 ↑↑↑
 
-    official_total = TOTAL_REVIEW_COUNT.get(picked, None)
-
-    ov1, ov2, ov3, ov4 = st.columns(4)
+    ov1, ov2, ov3 = st.columns(3)
     with ov1:
-        if official_total is not None:
-            st.metric("📝 총 리뷰 수", f"{official_total:,}건")
-        else:
-            st.metric("📝 총 리뷰 수", "미기입")
-            st.caption("코드 내 TOTAL_REVIEW_COUNT에 기입해주세요")
-    with ov2:
         st.metric("🔬 분석 리뷰 수", f"{total_n:,}건")
-    with ov3:
+    with ov2:
         st.metric("⭐ 평균 평점", f"{avg_rating:.2f} / 5.0")
-    with ov4:
+    with ov3:
         st.metric("🔄 재구매 리뷰 비율", f"{rep_rate}%", f"{rep_n}건")
 
     # ═══════════════════════════════════════════
