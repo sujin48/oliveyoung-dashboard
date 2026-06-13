@@ -96,6 +96,84 @@ def is_negative_irritation(text):
     return classify_irritation(text) == 'neg'
 
 
+# =================================================================
+# 1-3. 트러블/여드름 긍(케어)/부(유발) 분리 분류기
+# =================================================================
+TROUBLE_SEEDS = ['트러블', '여드름', '좁쌀', '뾰루지', '뾰로지', '화농', '뾰루치']
+TR_WIN_BACK = 16
+TR_WIN_FWD  = 20
+
+# 케어(긍정)·부정어: 트러블이 줄었다·사라졌다·안 생겼다·진정됐다
+_TR_POS = re.compile(
+    r'(진정|가라앉|잠잠|들어가|들어갔|들어간|사라|옅어|줄어|줄었|줄였|개선|완화|잡아|케어|회복|복구|효과|좋아|깨끗|'
+    r'안\s*나|안나|안\s*생|안생|안\s*올라|나지\s*않|없어졌|없앤|없네|없어요|덜\s*나)'
+)
+# 사용 맥락(조건절): "트러블 올라올 때/났을 때 바르면" → 제품 탓 아님
+_TR_CONDITIONAL = re.compile(r'(올라올|올라오려|올라오면|올라올랑|날\s*때|났을\s*때|생겼을\s*때|생기면|날때|때마다|올라왔을)')
+# 걱정·가정 (실제 발생 아님)
+_TR_WORRY = re.compile(r'(걱정|어떡|할까봐|날까봐|올라올까|뒤집힐까|날 것 같|날것 같|폭발할까)')
+# 명시적 악화·유발
+_TR_WORSEN = re.compile(r'(오히려|더\s*나게|폭탄|우다다|유발|악화|더\s*심|더\s*올라|더\s*뒤집)')
+# 실망·부적합 ('안맞'은 타제품 혼동 많아 제외)
+_TR_DISAPPOINT = re.compile(r'(아쉬|다른\s*제품\s*(사용|써|씀|으로|쓰)|버림|버렸|후회)')
+# 제품 원인 + 결과적 발생
+_TR_CAUSE = re.compile(r'(이거|이걸|이\s*제품|발라서|발랐더니|바르고\s*나|쓰고\s*나|쓰니|쓰면|사용하니|올리니|바르니)')
+_TR_APPEAR = re.compile(r'(났어|났는|났네|났습|올라왔|올라와요|생겼어|생겼는|생겼습|남\b|나더라|폭발)')
+
+
+def classify_trouble(text):
+    """
+    트러블/여드름 언급의 성격을 판정.
+    'pos'(트러블 케어=장점) / 'neg'(트러블 유발·악화=단점) / 'neutral' / 'none'
+    핵심: '여드름 올라올 때 바르면 진정'(사용맥락)·'날까봐 걱정'(가정)은 부정이 아니다.
+    """
+    t = normalize_text(text)
+    if not any(seed in t for seed in TROUBLE_SEEDS):
+        return 'none'
+    found_pos = False
+    found_neg = False
+    for seed in TROUBLE_SEEDS:
+        for m in re.finditer(seed, t):
+            s = m.start()
+            win = t[max(0, s - TR_WIN_BACK): s + len(seed) + TR_WIN_FWD]
+            # ① 케어 신호·부정어 → 긍정 (최우선)
+            if _TR_POS.search(win):
+                found_pos = True
+                continue
+            # ② 조건절(사용맥락)·걱정(가정) → 부정 아님
+            if _TR_CONDITIONAL.search(win) or _TR_WORRY.search(win):
+                continue
+            # ③ 악화·실망 → 부정
+            if _TR_WORSEN.search(win) or _TR_DISAPPOINT.search(win):
+                found_neg = True
+                continue
+            # ④ 제품 원인 + 결과 발생 → 부정
+            if _TR_CAUSE.search(win) and _TR_APPEAR.search(win):
+                found_neg = True
+                continue
+    if found_neg:
+        return 'neg'
+    if found_pos:
+        return 'pos'
+    return 'neutral'
+
+
+# =================================================================
+# 1-4. 분류기 기반 '계산형' 키워드를 장점/단점 카운트에 합쳐주는 함수
+# =================================================================
+def add_special_counts(series, counts, which):
+    """
+    키워드 매칭(get_kw_count)으로는 못 잡는 '맥락 분류' 항목을 합산해 추가.
+    which='pros' → 트러블케어  /  which='cons' → 자극(부정), 트러블유발
+    """
+    if which == 'pros':
+        counts['트러블케어'] = int(series.apply(lambda x: classify_trouble(x) == 'pos').sum())
+    elif which == 'cons':
+        counts['자극(부정)']  = int(series.apply(is_negative_irritation).sum())
+        counts['트러블유발'] = int(series.apply(lambda x: classify_trouble(x) == 'neg').sum())
+    return counts
+
+
 def get_kw_count(series, kw_dict):
     """
     리뷰 텍스트(series)에서 키워드 사전(kw_dict)에 해당하는 표현이
@@ -152,7 +230,7 @@ CONS_KW_DICT = {
     '끈적': '끈적임', '끈적임': '끈적임',
     '번들': '번들거림', '유분': '번들거림', '유분기': '번들거림',
     '밀림': '화장밀림', '겉돌': '화장밀림',
-    '자극': '자극/트러블', '따갑': '자극/트러블', '트러블': '자극/트러블', '여드름': '자극/트러블', '좁쌀': '자극/트러블', '붉어': '자극/트러블',
+    # '자극/트러블' 묶음은 제거 → 자극(부정)·트러블유발 로 분리 계산 (add_special_counts)
     '향': '향(호불호)', '냄새': '향(호불호)', '인공향': '향(호불호)',
     '답답': '답답함', '답답함': '답답함'
 }
@@ -331,16 +409,19 @@ def build_summary_table(df):
 # =================================================================
 # 7. 제품 x 키워드 히트맵용 데이터 만드는 함수
 # =================================================================
-def build_keyword_matrix(df, kw_dict, normalize=True):
+def build_keyword_matrix(df, kw_dict, normalize=True, special=None):
     """
     행=제품, 열=키워드, 값=언급건수(또는 비율) 인 표를 만드는 함수.
     히트맵 차트에 바로 넣을 수 있습니다.
     normalize=True 이면 제품별 리뷰수로 나눠 비율(%)로 바꿔
     리뷰수가 다른 제품끼리도 공정하게 비교할 수 있게 합니다.
+    special='pros'/'cons' 이면 분류기 기반 계산형 항목도 함께 추가합니다.
     """
     rows = []
     for product, g in df.groupby('product'):
         counts = get_kw_count(g['content'], kw_dict)
+        if special:
+            counts = add_special_counts(g['content'], counts, special)
         if normalize:
             n = len(g)
             counts = {k: (v / n * 100 if n else 0) for k, v in counts.items()}
@@ -581,7 +662,7 @@ with tab_compare:
 
     # ── 3-1. 장점 히트맵 (카테고리 평균 대비 +n%p 강조) ──
     st.subheader("👍 장점 키워드 히트맵 — 평균 대비 언급률 편차 (%p)")
-    pros_matrix = build_keyword_matrix(df, PROS_KW_DICT, normalize=True)
+    pros_matrix = build_keyword_matrix(df, PROS_KW_DICT, normalize=True, special='pros')
     # 각 키워드의 카테고리 평균을 빼서 '평균 대비 차이'로 변환
     pros_diff = pros_matrix.subtract(pros_matrix.mean(axis=0), axis=1).round(1)
     fig = px.imshow(
@@ -595,7 +676,7 @@ with tab_compare:
 
     # ── 3-2. 단점 히트맵 (카테고리 평균 대비 +n%p 강조) ──
     st.subheader("👎 단점 키워드 히트맵 — 평균 대비 언급률 편차 (%p)")
-    cons_matrix = build_keyword_matrix(df, CONS_KW_DICT, normalize=True)
+    cons_matrix = build_keyword_matrix(df, CONS_KW_DICT, normalize=True, special='cons')
     cons_diff = cons_matrix.subtract(cons_matrix.mean(axis=0), axis=1).round(1)
     fig = px.imshow(
         cons_diff, text_auto=True, aspect='auto',
@@ -850,7 +931,9 @@ with tab_detail:
     no_mention_n = total_n - irritation_n - mild_n
 
     pros = get_kw_count(one_df['content'], PROS_KW_DICT)
+    pros = add_special_counts(one_df['content'], pros, 'pros')   # 트러블케어 추가
     cons = get_kw_count(one_df['content'], CONS_KW_DICT)
+    cons = add_special_counts(one_df['content'], cons, 'cons')   # 자극(부정)·트러블유발 추가
     pros_df = pd.DataFrame(list(pros.items()), columns=['항목', '건수'])
     pros_df = pros_df[pros_df['건수'] > 0].sort_values('건수', ascending=False).head(15)
     cons_df = pd.DataFrame(list(cons.items()), columns=['항목', '건수'])
@@ -1125,8 +1208,8 @@ with tab_ai:
         with st.spinner("MD + BM 관점으로 분석 중입니다..."):
 
             # ── AI에게 넘길 데이터 최대한 풍부하게 구성 ──
-            pros_matrix  = build_keyword_matrix(df, PROS_KW_DICT, normalize=True)
-            cons_matrix  = build_keyword_matrix(df, CONS_KW_DICT, normalize=True)
+            pros_matrix  = build_keyword_matrix(df, PROS_KW_DICT, normalize=True, special='pros')
+            cons_matrix  = build_keyword_matrix(df, CONS_KW_DICT, normalize=True, special='cons')
             tpo_matrix   = build_keyword_matrix(df, TPO_KW_DICT, normalize=True)
             trig_matrix  = build_keyword_matrix(df, TRIGGER_KW_DICT, normalize=True)
 
