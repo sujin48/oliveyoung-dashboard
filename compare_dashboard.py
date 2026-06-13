@@ -437,7 +437,7 @@ def build_keyword_matrix(df, kw_dict, normalize=True, special=None):
 # 8. 메인 화면
 # =================================================================
 st.title("🆚 크림 Top 10 리뷰 비교 분석 대시보드")
-st.caption("올리브영 크림 카테고리 Top 10 제품의 리뷰 데이터를 자동으로 비교 분석합니다.")
+st.caption("올리브영 크림 카테고리 판매순 Top 10 제품의 리뷰 데이터를 자동으로 비교 분석합니다.")
 
 # --- GitHub 저장소에서 CSV 자동 로드 ---
 CSV_FILES = [
@@ -1203,11 +1203,11 @@ with tab_detail:
 # =================================================================
 with tab_ai:
     st.header("🤖 AI 비교 전략 리포트")
-    st.caption("올리브영 카테고리 MD + BM 컨설턴트 듀얼 관점의 경쟁 분석 리포트를 생성합니다.")
+    st.caption("리뷰 데이터를 기반으로 AI 경쟁 분석 리포트를 생성합니다.")
 
     if st.button("🚀 경쟁 제품 비교 전략 분석 시작", use_container_width=True):
         st.info("🔍 10개 제품 데이터를 집계하고 AI 전략 리포트를 생성 중입니다. 잠시만 기다려주세요... (30초~1분 소요)")
-        with st.spinner("MD + BM 관점으로 분석 중입니다..."):
+        with st.spinner("AI 분석 중입니다..."):
 
             # ── AI에게 넘길 데이터 최대한 풍부하게 구성 ──
             pros_matrix  = build_keyword_matrix(df, PROS_KW_DICT, normalize=True, special='pros')
