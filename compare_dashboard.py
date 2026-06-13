@@ -35,6 +35,67 @@ def compact_text(text: str) -> str:
     return re.sub(r"\s+", "", normalize_text(text))
 
 
+# =================================================================
+# 1-2. 자극 언급 긍/부정 분리 분류기
+# =================================================================
+# 자극 관련 씨앗 단어 (이게 있어야 자극 리뷰 후보)
+IRRITATION_SEEDS = ['자극', '따갑', '따가', '가렵', '가려', '쓰라', '뒤집', '좁쌀', '붉어', '아파', '아프']
+IRR_WINDOW = 15  # 씨앗 단어 이후 탐색 범위(글자). 라로슈포제 실제 리뷰 검증으로 결정.
+
+# ① 부정어/긍정 맥락: 자극 근처에 있으면 '불만 아님' (오히려 무자극 칭찬)
+_POS_OVERRIDE = re.compile(
+    r'(없|않|무자극|전혀|하나도|1도|별로\s*안|안\s*느|못\s*느|못느|안\s*따가|덜|진정|순하|순한|순해|편안|괜찮)'
+)
+# ② 효능·용도 맥락: "자극받은 피부 진정" → 제품이 자극을 해결하는 것 (제품 탓 아님)
+_EFFICACY = re.compile(r'자극[가-힣\s]{0,4}(받|간|난)')
+# ③ 진짜 불만 신호
+_NEG_CUE = re.compile(
+    r'(심하|심해|강하|강해|많아|가게|불호|거슬|따가워|따가웠|따갑다|쓰라|시려|시림|느껴|느꼈|느낀)'
+)
+
+
+def classify_irritation(text):
+    """
+    자극 언급의 성격을 판정한다.
+    반환: 'neg'(진짜 불만) / 'pos'(무자극 칭찬·진정용도) / 'neutral'(애매) / 'none'(언급없음)
+    핵심: 부정어·진정맥락(pos)을 먼저 배제한 뒤 진짜 불만(neg)을 찾는다. 순서 중요!
+    """
+    t = normalize_text(text)
+    if not any(seed in t for seed in IRRITATION_SEEDS):
+        return 'none'
+
+    found_neg = False
+    found_pos = False
+
+    for seed in ['자극', '따가', '따갑', '가려', '가렵', '쓰라']:
+        for m in re.finditer(seed, t):
+            s = m.start()
+            win = t[max(0, s - 2): s + len(seed) + IRR_WINDOW]
+            # ① 긍정·부정어 우선
+            if _POS_OVERRIDE.search(win) or re.search(r'자극\s*안', win):
+                found_pos = True
+                continue
+            # ② 효능·용도 맥락
+            if _EFFICACY.search(win) or '외부자극' in win or '외부 자극' in win:
+                found_pos = True
+                continue
+            # ③ 진짜 불만
+            if _NEG_CUE.search(win):
+                found_neg = True
+                continue
+
+    if found_neg:
+        return 'neg'
+    if found_pos:
+        return 'pos'
+    return 'neutral'
+
+
+def is_negative_irritation(text):
+    """진짜 자극 불만이면 True. 기존 .str.contains() 자리에 .apply() 로 사용."""
+    return classify_irritation(text) == 'neg'
+
+
 def get_kw_count(series, kw_dict):
     """
     리뷰 텍스트(series)에서 키워드 사전(kw_dict)에 해당하는 표현이
@@ -244,8 +305,8 @@ def build_summary_table(df):
         repurchase_rate = (g['repurchase'].astype(str).str.lower() == 'true').mean() * 100
         # 5점 비율
         five_rate = (g['rating'] == 5).mean() * 100
-        # 자극 언급률 (단점 키워드 기준 간단 계산)
-        irritation_n = g['content'].str.contains('따갑|가렵|자극|붉어|좁쌀|뒤집|아파', na=False).sum()
+        # 자극 불만률 (긍/부정 분리 분류기 적용 — 진짜 불만만 카운트)
+        irritation_n = g['content'].apply(is_negative_irritation).sum()
         irritation_rate = irritation_n / n * 100 if n else 0
 
         # 가격 만족도 지수 계산
@@ -550,17 +611,18 @@ with tab_compare:
     irr_rows = []
     for product, g in df.groupby('product'):
         n = len(g)
-        irr_n  = g['content'].str.contains('따갑|가렵|자극|붉어|좁쌀|뒤집|아파', na=False).sum()
-        mild_n = g['content'].str.contains('순해|자극 없|무자극|편안|안심', na=False).sum()
+        cls    = g['content'].apply(classify_irritation)
+        irr_n  = (cls == 'neg').sum()
+        mild_n = (cls == 'pos').sum()
         none_n = n - irr_n - mild_n
-        irr_rows.append({'product': product, '구분': '자극 언급', '비율': round(irr_n / n * 100, 1)})
-        irr_rows.append({'product': product, '구분': '무자극(순함)', '비율': round(mild_n / n * 100, 1)})
+        irr_rows.append({'product': product, '구분': '자극 불만(부정)', '비율': round(irr_n / n * 100, 1)})
+        irr_rows.append({'product': product, '구분': '무자극·진정(긍정)', '비율': round(mild_n / n * 100, 1)})
         irr_rows.append({'product': product, '구분': '언급 없음', '비율': round(none_n / n * 100, 1)})
     irr_df = pd.DataFrame(irr_rows)
     fig = px.bar(
         irr_df, x='product', y='비율', color='구분',
         barmode='stack', text='비율',
-        color_discrete_map={'자극 언급': '#E8404A', '무자극(순함)': '#4CAF50', '언급 없음': '#B0BEC5'},
+        color_discrete_map={'자극 불만(부정)': '#E8404A', '무자극·진정(긍정)': '#4CAF50', '언급 없음': '#B0BEC5'},
         labels={'비율': '비율 (%)', 'product': '제품'},
     )
     fig.update_traces(texttemplate='%{y:.1f}%', textposition='inside')
@@ -782,8 +844,9 @@ with tab_detail:
     rep_n        = (one_df['repurchase'].astype(str).str.lower() == 'true').sum()
     rep_rate     = round(rep_n / total_n * 100, 1) if total_n else 0
     rep_content  = one_df[one_df['repurchase'].astype(str).str.lower() == 'true']['content']
-    irritation_n = one_df['content'].str.contains('따갑|가렵|자극|붉어|좁쌀|뒤집|아파', na=False).sum()
-    mild_n       = one_df['content'].str.contains('순해|자극 없|무자극|편안|안심', na=False).sum()
+    cls_one      = one_df['content'].apply(classify_irritation)
+    irritation_n = (cls_one == 'neg').sum()
+    mild_n       = (cls_one == 'pos').sum()
     no_mention_n = total_n - irritation_n - mild_n
 
     pros = get_kw_count(one_df['content'], PROS_KW_DICT)
@@ -907,14 +970,14 @@ with tab_detail:
     with e1:
         st.caption("자극 및 트러블 언급 비율")
         irr_data = pd.DataFrame({
-            '구분': ['언급 없음', '무자극(순함)', '자극 언급'],
+            '구분': ['언급 없음', '무자극·진정', '자극 불만'],
             '건수': [no_mention_n, mild_n, irritation_n],
         }).sort_values('건수', ascending=False)
         fig = px.pie(irr_data, values='건수', names='구분', hole=0.4,
                      color='구분',
                      color_discrete_map={
-                         '자극 언급': '#E8404A',
-                         '무자극(순함)': '#4CAF50',
+                         '자극 불만': '#E8404A',
+                         '무자극·진정': '#4CAF50',
                          '언급 없음': '#B0BEC5'
                      })
         fig.update_traces(textinfo='label+percent')
@@ -999,7 +1062,8 @@ with tab_detail:
 
     if st.button(f"🚀 [{picked}] AI 인사이트 분석 시작", use_container_width=True,
                  key=f"single_ai_{picked}"):
-        with st.spinner("분석 중입니다..."):
+        st.info("🔍 데이터를 분석하고 AI 리포트를 생성 중입니다. 잠시만 기다려주세요... (10~20초 소요)")
+        with st.spinner("AI가 리뷰를 읽고 있습니다..."):
             rating_5_df  = one_df[one_df['rating'] == 5]
             trouble_5_df = one_trouble[one_trouble['rating'] == 5]
 
@@ -1057,7 +1121,8 @@ with tab_ai:
     st.caption("올리브영 카테고리 MD + BM 컨설턴트 듀얼 관점의 경쟁 분석 리포트를 생성합니다.")
 
     if st.button("🚀 경쟁 제품 비교 전략 분석 시작", use_container_width=True):
-        with st.spinner("MD + BM 관점으로 분석 중입니다... (제품 수에 따라 30초~1분 소요)"):
+        st.info("🔍 10개 제품 데이터를 집계하고 AI 전략 리포트를 생성 중입니다. 잠시만 기다려주세요... (30초~1분 소요)")
+        with st.spinner("MD + BM 관점으로 분석 중입니다..."):
 
             # ── AI에게 넘길 데이터 최대한 풍부하게 구성 ──
             pros_matrix  = build_keyword_matrix(df, PROS_KW_DICT, normalize=True)
@@ -1170,7 +1235,6 @@ with tab_recommend:
     # ── Step 3: TPO 선택 (선택사항) ──
     st.subheader("Step 3  사용 상황(TPO) 선택 (선택사항, 복수 선택 가능)")
     TPO_LIST = ["아침", "밤", "화장 전", "환절기", "여름", "겨울"]
-    # TPO 키워드를 데이터와 매핑
     TPO_KEYWORD_MAP = {
         "아침": "아침",
         "밤": "밤",
@@ -1187,7 +1251,6 @@ with tab_recommend:
 
     # ── Step 4: 기대 효능 선택 (선택사항) ──
     st.subheader("Step 4  기대 효능 선택 (선택사항, 복수 선택 가능)")
-    # PROS_KW_DICT의 대표 이름들을 중복 없이 추출
     EFFICACY_LIST = sorted(set(PROS_KW_DICT.values()))
     selected_efficacies = st.multiselect(
         "원하는 기대 효능을 모두 선택하세요",
@@ -1208,9 +1271,8 @@ with tab_recommend:
         for product, g in df.groupby('product'):
             n = len(g)
             score = 0.0
-            detail = {}  # 점수 근거 저장용
+            detail = {}
 
-            # ── 기본 점수: 해당 피부타입 리뷰어의 5점 비율 × 0.5 ──
             skin_sub = g[g['skinType'] == selected_type]
             n_skin   = len(skin_sub)
             if n_skin > 0:
@@ -1223,9 +1285,8 @@ with tab_recommend:
                 rep_rate_skin  = 0
                 base_score     = 0
 
-            # 평균 평점 정규화 점수 × 0.2
             avg_rt       = g['rating'].mean()
-            norm_rating  = (avg_rt - 1) / 4 * 100   # 1~5점 → 0~100
+            norm_rating  = (avg_rt - 1) / 4 * 100
             base_score  += norm_rating * 0.2
 
             score += base_score
@@ -1233,7 +1294,6 @@ with tab_recommend:
             detail[f'{selected_type} 리뷰어 수'] = n_skin
             detail[f'{selected_type} 5점비율'] = f"{five_rate_skin:.1f}%"
 
-            # ── 피부고민 보너스: 선택 고민 보유자 중 5점 비율 평균 ──
             if selected_troubles:
                 trouble_scores = []
                 for tr in selected_troubles:
@@ -1249,12 +1309,10 @@ with tab_recommend:
                     score        += trouble_bonus
                     detail['피부고민 보너스'] = round(trouble_bonus, 2)
 
-            # ── TPO 보너스: 선택 TPO 언급률 합산 ──
             if selected_tpos:
                 tpo_bonus = 0
                 for tpo_label in selected_tpos:
                     tpo_kw = TPO_KEYWORD_MAP[tpo_label]
-                    # TPO_KW_DICT에서 해당 대표명과 매핑된 검색어 찾기
                     patterns = [re.escape(normalize_text(k))
                                 for k, v in TPO_KW_DICT.items() if v == tpo_kw]
                     if patterns:
@@ -1264,11 +1322,9 @@ with tab_recommend:
                 score        += tpo_bonus
                 detail['TPO 보너스'] = round(tpo_bonus, 2)
 
-            # ── 기대 효능 보너스: 선택 효능 언급률 합산 ──
             if selected_efficacies:
                 efficacy_bonus = 0
                 for eff in selected_efficacies:
-                    # PROS_KW_DICT에서 해당 대표명에 매핑된 검색어 수집
                     patterns_n = [re.escape(normalize_text(k))
                                   for k, v in PROS_KW_DICT.items() if v == eff]
                     patterns_c = [re.escape(compact_text(k))
@@ -1284,15 +1340,10 @@ with tab_recommend:
                 score += efficacy_bonus
                 detail['기대 효능 보너스'] = round(efficacy_bonus, 2)
 
-            # ── 비추 페널티: 해당 피부타입 자극 언급률 ──
             if n_skin > 0:
-                irr_penalty = skin_sub['content'].str.contains(
-                    '따갑|가렵|자극|붉어|좁쌀|뒤집|아파', na=False
-                ).mean() * 100
+                irr_penalty = skin_sub['content'].apply(is_negative_irritation).mean() * 100
             else:
-                irr_penalty = g['content'].str.contains(
-                    '따갑|가렵|자극|붉어|좁쌀|뒤집|아파', na=False
-                ).mean() * 100
+                irr_penalty = g['content'].apply(is_negative_irritation).mean() * 100
             score -= irr_penalty * 0.5
             detail['자극 페널티'] = round(irr_penalty * 0.5, 2)
             detail['최종점수']    = round(score, 2)
@@ -1302,19 +1353,30 @@ with tab_recommend:
         result_df = pd.DataFrame(score_rows).sort_values('점수', ascending=False).reset_index(drop=True)
         result_df['순위'] = result_df.index + 1
 
-        # ════════════════════════════════
-        # 결과 표시
-        # ════════════════════════════════
+        # ── 결과를 session_state에 저장 (AI 버튼 눌러도 결과 유지되도록) ──
+        st.session_state['rec_result_df']       = result_df
+        st.session_state['rec_selected_type']   = selected_type
+        st.session_state['rec_selected_troubles'] = selected_troubles
+        st.session_state['rec_selected_tpos']   = selected_tpos
+        st.session_state['rec_selected_efficacies'] = selected_efficacies
+
+    # ── 결과 표시 (session_state에 저장된 경우 항상 렌더링) ──
+    if 'rec_result_df' in st.session_state:
+        result_df       = st.session_state['rec_result_df']
+        s_type          = st.session_state['rec_selected_type']
+        s_troubles      = st.session_state['rec_selected_troubles']
+        s_tpos          = st.session_state['rec_selected_tpos']
+        s_efficacies    = st.session_state['rec_selected_efficacies']
+
         st.subheader("📊 추천 순위 결과")
 
-        # 조건 요약
-        cond_parts = [f"피부타입: {selected_type}"]
-        if selected_troubles:
-            cond_parts.append(f"피부고민: {', '.join(selected_troubles)}")
-        if selected_tpos:
-            cond_parts.append(f"TPO: {', '.join(selected_tpos)}")
-        if selected_efficacies:
-            cond_parts.append(f"기대 효능: {', '.join(selected_efficacies)}")
+        cond_parts = [f"피부타입: {s_type}"]
+        if s_troubles:
+            cond_parts.append(f"피부고민: {', '.join(s_troubles)}")
+        if s_tpos:
+            cond_parts.append(f"TPO: {', '.join(s_tpos)}")
+        if s_efficacies:
+            cond_parts.append(f"기대 효능: {', '.join(s_efficacies)}")
         st.info("  |  ".join(cond_parts))
 
         # 1~3위 카드
@@ -1329,7 +1391,7 @@ with tab_recommend:
                     f"<div style='font-weight:bold;font-size:1.05em;margin:8px 0;'>{row['product']}</div>"
                     f"<div style='color:#E8404A;font-size:1.3em;font-weight:bold;'>{row['점수']:.1f}점</div>"
                     f"<div style='color:gray;font-size:0.85em;margin-top:6px;'>"
-                    f"{row.get(f'{selected_type} 5점비율', 'N/A')} 만족</div>"
+                    f"{row.get(f'{s_type} 5점비율', 'N/A')} 만족</div>"
                     f"</div>",
                     unsafe_allow_html=True
                 )
@@ -1339,13 +1401,13 @@ with tab_recommend:
         # 전체 순위표
         with st.expander("📋 전체 순위 상세 보기"):
             display_cols = ['순위', 'product', '점수',
-                            f'{selected_type} 리뷰어 수', f'{selected_type} 5점비율',
+                            f'{s_type} 리뷰어 수', f'{s_type} 5점비율',
                             '기본점수']
-            if selected_troubles:
+            if s_troubles:
                 display_cols.append('피부고민 보너스')
-            if selected_tpos:
+            if s_tpos:
                 display_cols.append('TPO 보너스')
-            if selected_efficacies:
+            if s_efficacies:
                 display_cols.append('기대 효능 보너스')
             display_cols.append('자극 페널티')
             display_cols = [c for c in display_cols if c in result_df.columns]
@@ -1355,13 +1417,13 @@ with tab_recommend:
         worst = result_df.tail(3)['product'].tolist()
         st.warning(f"⚠️ 비추 제품 (하위 3개): {' / '.join(worst)}")
 
-        # ── AI 추천 이유 버튼 ──
+        # ── AI 추천 이유 버튼 (결과 블록 밖에 독립 렌더링 → 리셋 없음) ──
         st.markdown("---")
         if st.button("🤖 AI 추천 이유 상세 설명 받기", use_container_width=True, key="rec_ai_btn"):
-            with st.spinner("AI가 추천 이유를 분석 중입니다..."):
-
+            st.info("✍️ AI가 추천 이유를 작성 중입니다. 잠시만 기다려주세요... (10~20초 소요)")
+            with st.spinner("AI가 분석 중입니다..."):
                 top5_info = result_df.head(5)[
-                    ['product', '점수', f'{selected_type} 5점비율', '기본점수']
+                    ['product', '점수', f'{s_type} 5점비율', '기본점수']
                 ].to_dict('records')
 
                 rec_prompt = f"""
@@ -1369,10 +1431,10 @@ with tab_recommend:
 각 추천 제품의 이유를 한국어로 친절하게 설명해줘.
 
 [사용자 조건]
-- 피부타입: {selected_type}
-- 피부고민: {selected_troubles if selected_troubles else '선택 없음'}
-- TPO: {selected_tpos if selected_tpos else '선택 없음'}
-- 기대 효능: {selected_efficacies if selected_efficacies else '선택 없음'}
+- 피부타입: {s_type}
+- 피부고민: {s_troubles if s_troubles else '선택 없음'}
+- TPO: {s_tpos if s_tpos else '선택 없음'}
+- 기대 효능: {s_efficacies if s_efficacies else '선택 없음'}
 
 [추천 순위 Top 5 (점수 기준)]
 {top5_info}
