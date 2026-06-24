@@ -1728,22 +1728,6 @@ with st.sidebar:
     st.caption("리뷰 데이터를 기반으로 궁금한 것을 자유롭게 물어보세요!")
     st.markdown("---")
 
-    # 예시 질문 버튼
-    st.markdown("**💡 이런 걸 물어보세요**")
-    example_questions = [
-        "복합성 피부에 가장 잘 맞는 제품은?",
-        "재구매율이 가장 높은 제품은?",
-        "민감성 피부인데 자극이 적은 제품 추천해줘",
-        "건조함 고민이 있는 사람들이 가장 만족한 제품은?",
-        "가격 대비 만족도가 가장 높은 제품은?",
-        "트러블성 피부에 비추천 제품은?",
-    ]
-    for eq in example_questions:
-        if st.button(eq, key=f"ex_{eq}", use_container_width=True):
-            st.session_state["chatbot_input_prefill"] = eq
-
-    st.markdown("---")
-
     # 대화 히스토리 초기화
     if "chat_history" not in st.session_state:
         st.session_state["chat_history"] = []
@@ -1765,56 +1749,70 @@ with st.sidebar:
                     unsafe_allow_html=True
                 )
 
-    # 입력창 — 예시 버튼 클릭 시 자동 채워지도록
-    prefill = st.session_state.pop("chatbot_input_prefill", "")
+    # 입력창 + 전송 버튼
     user_input = st.text_input(
         "질문을 입력하세요",
-        value=prefill,
         placeholder="예: 복합성 피부에 가장 잘 맞는 제품은?",
         key="chatbot_text_input",
         label_visibility="collapsed",
     )
+    send_btn = st.button("전송 ➤", use_container_width=True, key="chatbot_send")
 
-    col_send, col_clear = st.columns([3, 1])
-    with col_send:
-        send_btn = st.button("전송 ➤", use_container_width=True, key="chatbot_send")
-    with col_clear:
-        if st.button("초기화", use_container_width=True, key="chatbot_clear"):
-            st.session_state["chat_history"] = []
-            st.rerun()
-
-    # ── 챗봇 컨텍스트 데이터 구성 (집계 수치만 전달 → 빠름·비용 절약) ──
+    # ── 챗봇 컨텍스트 데이터 구성 ──
     @st.cache_data
     def build_chatbot_context(_df, _trouble_df, _summary):
         """
         챗봇에게 넘길 데이터 컨텍스트를 미리 계산해두는 함수.
-        _df, _trouble_df 앞에 언더스코어(_)를 붙이면
-        Streamlit cache가 해시 계산을 건너뛰어 DataFrame도 캐시할 수 있음.
+        피부타입·피부고민별 5점 만족도를 전체 조합으로 전달해
+        GPT가 질문에 맞는 피부타입을 정확히 필터링해서 답변하도록 함.
         """
-        # 피부타입별 5점 만족도 (제품×피부타입)
-        skin_all = _df.groupby(['product', 'skinType']).size().reset_index(name='전체')
-        skin_5   = _df[_df['rating'] == 5].groupby(['product', 'skinType']).size().reset_index(name='5점')
+        # ① 피부타입별 5점 만족도 — 전체 조합 (상위50개)
+        skin_all = _df.groupby(['product', 'skinType']).size().reset_index(name='리뷰어수')
+        skin_5   = _df[_df['rating'] == 5].groupby(['product', 'skinType']).size().reset_index(name='5점수')
         skin_sat = skin_all.merge(skin_5, on=['product', 'skinType'], how='left').fillna(0)
-        skin_sat['5점비율'] = (skin_sat['5점'] / skin_sat['전체'] * 100).round(1)
+        skin_sat['5점만족도(%)'] = (skin_sat['5점수'] / skin_sat['리뷰어수'] * 100).round(1)
+        # 리뷰어가 너무 적은 조합은 신뢰도 낮으므로 5명 이상만 포함
+        skin_sat = skin_sat[skin_sat['리뷰어수'] >= 5].sort_values('5점만족도(%)', ascending=False)
 
-        # 피부고민별 5점 만족도 (제품×피부고민)
-        tr_all = _trouble_df.groupby(['product', 'skinTrouble']).size().reset_index(name='전체')
-        tr_5   = _trouble_df[_trouble_df['rating'] == 5].groupby(['product', 'skinTrouble']).size().reset_index(name='5점')
+        # ② 피부고민별 5점 만족도 — 전체 조합 (상위50개)
+        tr_all = _trouble_df.groupby(['product', 'skinTrouble']).size().reset_index(name='리뷰어수')
+        tr_5   = _trouble_df[_trouble_df['rating'] == 5].groupby(['product', 'skinTrouble']).size().reset_index(name='5점수')
         tr_sat = tr_all.merge(tr_5, on=['product', 'skinTrouble'], how='left').fillna(0)
-        tr_sat['5점비율'] = (tr_sat['5점'] / tr_sat['전체'] * 100).round(1)
+        tr_sat['5점만족도(%)'] = (tr_sat['5점수'] / tr_sat['리뷰어수'] * 100).round(1)
+        tr_sat = tr_sat[tr_sat['리뷰어수'] >= 5].sort_values('5점만족도(%)', ascending=False)
+
+        # ③ 장점 키워드 언급률 (제품별) — 수분감·보습력·화잘먹 등 효능 질문 대응용
+        kw_rows = []
+        for product, g in _df.groupby('product'):
+            n = len(g)
+            counts = get_kw_count(g['content'], PROS_KW_DICT)
+            counts['product'] = product
+            counts['리뷰수'] = n
+            kw_rows.append(counts)
+        kw_df = pd.DataFrame(kw_rows).set_index('product')
+        # 언급률(%)로 변환
+        for col in kw_df.columns:
+            if col != '리뷰수':
+                kw_df[col] = (kw_df[col] / kw_df['리뷰수'] * 100).round(1)
+        kw_df = kw_df.drop(columns=['리뷰수'])
 
         ctx = f"""
 [분석 대상]
 올리브영 크림 카테고리 Top 10 제품의 실제 구매 리뷰 데이터 (총 {len(_df):,}건)
 
-[제품별 핵심 지표]
+[제품별 핵심 지표] ← 전체 평균 기준. 피부타입별 질문엔 아래 피부타입별 만족도를 우선 사용할 것.
 {_summary[['product','리뷰수','평균평점','5점비율(%)','재구매율(%)','자극언급률(%)','가격만족도지수']].to_string(index=False)}
 
-[피부타입별 5점 만족도 상위 조합 (상위 30개)]
-{skin_sat.sort_values('5점비율', ascending=False).head(30)[['product','skinType','전체','5점비율']].to_string(index=False)}
+[피부타입별 5점 만족도] ← 피부타입 관련 질문 시 반드시 이 데이터를 우선 참조
+의미: 해당 피부타입을 가진 리뷰어 중 실제로 5점을 준 비율. 높을수록 해당 피부에 잘 맞는 제품.
+{skin_sat[['product','skinType','리뷰어수','5점만족도(%)']].head(50).to_string(index=False)}
 
-[피부고민별 5점 만족도 상위 조합 (상위 30개)]
-{tr_sat.sort_values('5점비율', ascending=False).head(30)[['product','skinTrouble','전체','5점비율']].to_string(index=False)}
+[피부고민별 5점 만족도] ← 피부고민(건조함·트러블 등) 관련 질문 시 반드시 이 데이터를 우선 참조
+의미: 해당 피부고민을 가진 리뷰어 중 실제로 5점을 준 비율. 높을수록 해당 고민 해결에 효과적.
+{tr_sat[['product','skinTrouble','리뷰어수','5점만족도(%)']].head(50).to_string(index=False)}
+
+[장점 키워드 언급률(%)] ← 수분감·보습력·화잘먹·진정 등 효능 관련 질문 시 이 데이터를 참조
+{kw_df.to_string()}
 """
         return ctx
 
@@ -1827,9 +1825,16 @@ with st.sidebar:
 [데이터]
 {chatbot_context}
 
-[답변 규칙]
+[답변 우선순위 규칙 — 반드시 준수]
+- 피부타입(건성·지성·복합성·민감성 등) 언급 시: [피부타입별 5점 만족도]에서 해당 피부타입만 필터링 후 5점만족도(%) 높은 순으로 추천.
+  절대로 전체 5점비율(%)로 대체하지 말 것.
+- 피부고민(건조함·트러블·주름 등) 언급 시: [피부고민별 5점 만족도]에서 해당 고민만 필터링 후 추천.
+- 효능(수분감·화잘먹 등) 언급 시: [장점 키워드 언급률]에서 해당 키워드 높은 제품 추천.
+- 피부타입 + 효능 복합 질문: 피부타입별 5점 만족도로 1차 필터 → 해당 제품 중 효능 언급률로 2차 정렬.
+
+[답변 형식 규칙]
 1. 한국어로 친절하게, 3~5문장 이내로 간결하게.
-2. 반드시 수치(5점비율%, 재구매율%, 평균평점 등)를 근거로 제시.
+2. 반드시 수치(5점만족도%, 언급률%, 재구매율% 등)를 괄호로 표기.
 3. 제품명은 정확하게 그대로 표기.
 4. 별표(**)나 마크다운 제목(#) 사용 금지 — 사이드바에서 깨져 보임.
 5. 추천이 여러 개면 1위·2위·3위 형태로 나열.
