@@ -664,10 +664,23 @@ with tab_compare:
         skin_merged5 = skin_all5.merge(skin_5only, on=['product', 'skinType'], how='left').fillna(0)
         skin_merged5['비율'] = (skin_merged5['5점건수'] / skin_merged5['전체건수'] * 100).round(1)
         pivot_skin5 = skin_merged5.pivot(index='product', columns='skinType', values='비율').fillna(0)
+        # hover용 리뷰어 수 pivot (전체건수 기준)
+        pivot_skin5_n = skin_merged5.pivot(index='product', columns='skinType', values='전체건수').fillna(0).astype(int)
+        import numpy as np
         fig = px.imshow(pivot_skin5, text_auto=True, aspect='auto',
                         color_continuous_scale='Greens',
                         labels=dict(color='5점 비율(%)'))
-        fig.update_traces(texttemplate='%{z:.1f}%')
+        fig.update_traces(
+            texttemplate='%{z:.1f}%',
+            customdata=pivot_skin5_n.values,
+            hovertemplate=(
+                '<b>skinType: %{x}</b><br>'
+                'product: %{y}<br>'
+                '리뷰어 수: %{customdata}명<br>'
+                '5점 비율: %{z:.1f}%'
+                '<extra></extra>'
+            )
+        )
         fig.update_layout(title='피부타입별 5점 만족도(%)')
         st.plotly_chart(fig, use_container_width=True)
     with h2:
@@ -678,10 +691,22 @@ with tab_compare:
         tr_merged5 = tr_all5.merge(tr_5only, on=['product', 'skinTrouble'], how='left').fillna(0)
         tr_merged5['비율'] = (tr_merged5['5점건수'] / tr_merged5['전체건수'] * 100).round(1)
         pivot_tr5 = tr_merged5.pivot(index='product', columns='skinTrouble', values='비율').fillna(0)
+        # hover용 리뷰어 수 pivot
+        pivot_tr5_n = tr_merged5.pivot(index='product', columns='skinTrouble', values='전체건수').fillna(0).astype(int)
         fig = px.imshow(pivot_tr5, text_auto=True, aspect='auto',
                         color_continuous_scale='Greens',
                         labels=dict(color='5점 비율(%)'))
-        fig.update_traces(texttemplate='%{z:.1f}%')
+        fig.update_traces(
+            texttemplate='%{z:.1f}%',
+            customdata=pivot_tr5_n.values,
+            hovertemplate=(
+                '<b>피부고민: %{x}</b><br>'
+                'product: %{y}<br>'
+                '리뷰어 수: %{customdata}명<br>'
+                '5점 비율: %{z:.1f}%'
+                '<extra></extra>'
+            )
+        )
         fig.update_layout(title='피부고민별 5점 만족도(%)')
         st.plotly_chart(fig, use_container_width=True)
 
@@ -698,11 +723,23 @@ with tab_compare:
         skin_merged1 = skin_all1.merge(skin_1only, on=['product', 'skinType'], how='left').fillna(0)
         skin_merged1['비율'] = (skin_merged1['저점건수'] / skin_merged1['전체건수'] * 100).round(1)
         pivot_skin1 = skin_merged1.pivot(index='product', columns='skinType', values='비율').fillna(0)
+        # hover용 리뷰어 수 pivot
+        pivot_skin1_n = skin_merged1.pivot(index='product', columns='skinType', values='전체건수').fillna(0).astype(int)
         if pivot_skin1.values.max() > 0:
             fig = px.imshow(pivot_skin1, text_auto=True, aspect='auto',
                             color_continuous_scale='Reds',
                             labels=dict(color='1~2점 비율(%)'))
-            fig.update_traces(texttemplate='%{z:.1f}%')
+            fig.update_traces(
+                texttemplate='%{z:.1f}%',
+                customdata=pivot_skin1_n.values,
+                hovertemplate=(
+                    '<b>skinType: %{x}</b><br>'
+                    'product: %{y}<br>'
+                    '리뷰어 수: %{customdata}명<br>'
+                    '1~2점 비율: %{z:.1f}%'
+                    '<extra></extra>'
+                )
+            )
             fig.update_layout(title='피부타입별 1~2점 불만족도(%)')
             st.plotly_chart(fig, use_container_width=True)
         else:
@@ -715,11 +752,23 @@ with tab_compare:
         tr_merged1 = tr_all1.merge(tr_1only, on=['product', 'skinTrouble'], how='left').fillna(0)
         tr_merged1['비율'] = (tr_merged1['저점건수'] / tr_merged1['전체건수'] * 100).round(1)
         pivot_tr1 = tr_merged1.pivot(index='product', columns='skinTrouble', values='비율').fillna(0)
+        # hover용 리뷰어 수 pivot
+        pivot_tr1_n = tr_merged1.pivot(index='product', columns='skinTrouble', values='전체건수').fillna(0).astype(int)
         if pivot_tr1.values.max() > 0:
             fig = px.imshow(pivot_tr1, text_auto=True, aspect='auto',
                             color_continuous_scale='Reds',
                             labels=dict(color='1~2점 비율(%)'))
-            fig.update_traces(texttemplate='%{z:.1f}%')
+            fig.update_traces(
+                texttemplate='%{z:.1f}%',
+                customdata=pivot_tr1_n.values,
+                hovertemplate=(
+                    '<b>피부고민: %{x}</b><br>'
+                    'product: %{y}<br>'
+                    '리뷰어 수: %{customdata}명<br>'
+                    '1~2점 비율: %{z:.1f}%'
+                    '<extra></extra>'
+                )
+            )
             fig.update_layout(title='피부고민별 1~2점 불만족도(%)')
             st.plotly_chart(fig, use_container_width=True)
         else:
