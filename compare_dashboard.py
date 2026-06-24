@@ -651,67 +651,76 @@ with tab_compare:
     fig.update_traces(texttemplate='%{z:.1f}%')
     st.plotly_chart(fig, use_container_width=True)
 
-    # ── 2-3. 5점 리뷰어 피부타입 & 피부고민 히트맵 ──
-    st.subheader("⭐ 5점 리뷰어 피부타입 & 피부고민 히트맵")
+    # ── 2-3. 피부타입·피부고민별 5점 만족도 히트맵 ──
+    # [변경] "5점 리뷰 중 피부타입 구성비" → "해당 피부타입 보유자 중 5점을 준 비율(만족도)"
+    st.subheader("⭐ 피부타입·피부고민별 5점 만족도 히트맵")
+    st.caption("셀 값 = 해당 피부타입(고민)을 가진 리뷰어 중 5점을 준 비율 (높을수록 해당 피부에 잘 맞음)")
     h1, h2 = st.columns(2)
     with h1:
-        df_5 = df[df['rating'] == 5]
-        skin5_ct = df_5.groupby(['product', 'skinType']).size().reset_index(name='건수')
-        product_5n = df_5.groupby('product').size().reset_index(name='total')
-        skin5_ct = skin5_ct.merge(product_5n, on='product')
-        skin5_ct['비율'] = (skin5_ct['건수'] / skin5_ct['total'] * 100).round(1)
-        pivot_skin5 = skin5_ct.pivot(index='product', columns='skinType', values='비율').fillna(0)
+        # 전체 리뷰 기준: 피부타입별 전체 건수
+        skin_all5 = df.groupby(['product', 'skinType']).size().reset_index(name='전체건수')
+        # 5점 리뷰 기준: 피부타입별 5점 건수
+        skin_5only = df[df['rating'] == 5].groupby(['product', 'skinType']).size().reset_index(name='5점건수')
+        skin_merged5 = skin_all5.merge(skin_5only, on=['product', 'skinType'], how='left').fillna(0)
+        skin_merged5['비율'] = (skin_merged5['5점건수'] / skin_merged5['전체건수'] * 100).round(1)
+        pivot_skin5 = skin_merged5.pivot(index='product', columns='skinType', values='비율').fillna(0)
         fig = px.imshow(pivot_skin5, text_auto=True, aspect='auto',
                         color_continuous_scale='Greens',
-                        labels=dict(color='비율(%)'))
+                        labels=dict(color='5점 비율(%)'))
         fig.update_traces(texttemplate='%{z:.1f}%')
-        fig.update_layout(title='피부타입 분포도')
+        fig.update_layout(title='피부타입별 5점 만족도(%)')
         st.plotly_chart(fig, use_container_width=True)
     with h2:
-        trouble_5 = trouble_df[trouble_df['rating'] == 5]
-        tr5_ct = trouble_5.groupby(['product', 'skinTrouble']).size().reset_index(name='건수')
-        tr5_ct = tr5_ct.merge(product_5n, on='product')
-        tr5_ct['비율'] = (tr5_ct['건수'] / tr5_ct['total'] * 100).round(1)
-        pivot_tr5 = tr5_ct.pivot(index='product', columns='skinTrouble', values='비율').fillna(0)
+        # 전체 리뷰 기준: 피부고민별 전체 건수
+        tr_all5 = trouble_df.groupby(['product', 'skinTrouble']).size().reset_index(name='전체건수')
+        # 5점 리뷰 기준: 피부고민별 5점 건수
+        tr_5only = trouble_df[trouble_df['rating'] == 5].groupby(['product', 'skinTrouble']).size().reset_index(name='5점건수')
+        tr_merged5 = tr_all5.merge(tr_5only, on=['product', 'skinTrouble'], how='left').fillna(0)
+        tr_merged5['비율'] = (tr_merged5['5점건수'] / tr_merged5['전체건수'] * 100).round(1)
+        pivot_tr5 = tr_merged5.pivot(index='product', columns='skinTrouble', values='비율').fillna(0)
         fig = px.imshow(pivot_tr5, text_auto=True, aspect='auto',
                         color_continuous_scale='Greens',
-                        labels=dict(color='비율(%)'))
+                        labels=dict(color='5점 비율(%)'))
         fig.update_traces(texttemplate='%{z:.1f}%')
-        fig.update_layout(title='피부고민 분포도')
+        fig.update_layout(title='피부고민별 5점 만족도(%)')
         st.plotly_chart(fig, use_container_width=True)
 
-    # ── 2-4. 1~2점 리뷰어 피부타입 & 피부고민 히트맵 ──
-    st.subheader("💔 1~2점 리뷰어 피부타입 & 피부고민 히트맵")
+    # ── 2-4. 피부타입·피부고민별 1~2점 불만족도 히트맵 ──
+    # [변경] "1~2점 리뷰 중 피부타입 구성비" → "해당 피부타입 보유자 중 1~2점을 준 비율(불만족도)"
+    st.subheader("💔 피부타입·피부고민별 1~2점 불만족도 히트맵")
+    st.caption("셀 값 = 해당 피부타입(고민)을 가진 리뷰어 중 1~2점을 준 비율 (높을수록 해당 피부에 안 맞음)")
     h3, h4 = st.columns(2)
     with h3:
-        df_1 = df[df['rating'] <= 2]
-        if len(df_1) > 0:
-            skin1_ct = df_1.groupby(['product', 'skinType']).size().reset_index(name='건수')
-            product_1n = df_1.groupby('product').size().reset_index(name='total')
-            skin1_ct = skin1_ct.merge(product_1n, on='product')
-            skin1_ct['비율'] = (skin1_ct['건수'] / skin1_ct['total'] * 100).round(1)
-            pivot_skin1 = skin1_ct.pivot(index='product', columns='skinType', values='비율').fillna(0)
+        # 전체 리뷰 기준: 피부타입별 전체 건수
+        skin_all1 = df.groupby(['product', 'skinType']).size().reset_index(name='전체건수')
+        # 1~2점 리뷰 기준: 피부타입별 1~2점 건수
+        skin_1only = df[df['rating'] <= 2].groupby(['product', 'skinType']).size().reset_index(name='저점건수')
+        skin_merged1 = skin_all1.merge(skin_1only, on=['product', 'skinType'], how='left').fillna(0)
+        skin_merged1['비율'] = (skin_merged1['저점건수'] / skin_merged1['전체건수'] * 100).round(1)
+        pivot_skin1 = skin_merged1.pivot(index='product', columns='skinType', values='비율').fillna(0)
+        if pivot_skin1.values.max() > 0:
             fig = px.imshow(pivot_skin1, text_auto=True, aspect='auto',
                             color_continuous_scale='Reds',
-                            labels=dict(color='비율(%)'))
+                            labels=dict(color='1~2점 비율(%)'))
             fig.update_traces(texttemplate='%{z:.1f}%')
-            fig.update_layout(title='피부타입 분포도')
+            fig.update_layout(title='피부타입별 1~2점 불만족도(%)')
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("1~2점 리뷰 데이터가 없습니다.")
     with h4:
-        trouble_1 = trouble_df[trouble_df['rating'] <= 2]
-        if len(trouble_1) > 0:
-            tr1_ct = trouble_1.groupby(['product', 'skinTrouble']).size().reset_index(name='건수')
-            product_1n = df_1.groupby('product').size().reset_index(name='total')
-            tr1_ct = tr1_ct.merge(product_1n, on='product')
-            tr1_ct['비율'] = (tr1_ct['건수'] / tr1_ct['total'] * 100).round(1)
-            pivot_tr1 = tr1_ct.pivot(index='product', columns='skinTrouble', values='비율').fillna(0)
+        # 전체 리뷰 기준: 피부고민별 전체 건수
+        tr_all1 = trouble_df.groupby(['product', 'skinTrouble']).size().reset_index(name='전체건수')
+        # 1~2점 리뷰 기준: 피부고민별 1~2점 건수
+        tr_1only = trouble_df[trouble_df['rating'] <= 2].groupby(['product', 'skinTrouble']).size().reset_index(name='저점건수')
+        tr_merged1 = tr_all1.merge(tr_1only, on=['product', 'skinTrouble'], how='left').fillna(0)
+        tr_merged1['비율'] = (tr_merged1['저점건수'] / tr_merged1['전체건수'] * 100).round(1)
+        pivot_tr1 = tr_merged1.pivot(index='product', columns='skinTrouble', values='비율').fillna(0)
+        if pivot_tr1.values.max() > 0:
             fig = px.imshow(pivot_tr1, text_auto=True, aspect='auto',
                             color_continuous_scale='Reds',
-                            labels=dict(color='비율(%)'))
+                            labels=dict(color='1~2점 비율(%)'))
             fig.update_traces(texttemplate='%{z:.1f}%')
-            fig.update_layout(title='피부고민 분포도')
+            fig.update_layout(title='피부고민별 1~2점 불만족도(%)')
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("1~2점 리뷰 데이터가 없습니다.")
