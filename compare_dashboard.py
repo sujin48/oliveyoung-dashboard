@@ -1718,3 +1718,142 @@ with tab_recommend:
                     st.markdown(rec_response.choices[0].message.content, unsafe_allow_html=True)
                 except Exception as e:
                     st.error(f"오류 발생: {e}")
+
+
+# =================================================================
+# 사이드바 AI 챗봇
+# =================================================================
+with st.sidebar:
+    st.markdown("## 💬 AI 데이터 분석 챗봇")
+    st.caption("리뷰 데이터를 기반으로 궁금한 것을 자유롭게 물어보세요!")
+    st.markdown("---")
+
+    # 예시 질문 버튼
+    st.markdown("**💡 이런 걸 물어보세요**")
+    example_questions = [
+        "복합성 피부에 가장 잘 맞는 제품은?",
+        "재구매율이 가장 높은 제품은?",
+        "민감성 피부인데 자극이 적은 제품 추천해줘",
+        "건조함 고민이 있는 사람들이 가장 만족한 제품은?",
+        "가격 대비 만족도가 가장 높은 제품은?",
+        "트러블성 피부에 비추천 제품은?",
+    ]
+    for eq in example_questions:
+        if st.button(eq, key=f"ex_{eq}", use_container_width=True):
+            st.session_state["chatbot_input_prefill"] = eq
+
+    st.markdown("---")
+
+    # 대화 히스토리 초기화
+    if "chat_history" not in st.session_state:
+        st.session_state["chat_history"] = []
+
+    # 대화 내역 표시
+    chat_container = st.container()
+    with chat_container:
+        for msg in st.session_state["chat_history"]:
+            if msg["role"] == "user":
+                st.markdown(
+                    f"<div style='background:#f0f2f6;border-radius:10px;padding:8px 12px;"
+                    f"margin:4px 0;font-size:0.88em;'>🙋 {msg['content']}</div>",
+                    unsafe_allow_html=True
+                )
+            else:
+                st.markdown(
+                    f"<div style='background:#e8f4ea;border-radius:10px;padding:8px 12px;"
+                    f"margin:4px 0;font-size:0.88em;'>🤖 {msg['content']}</div>",
+                    unsafe_allow_html=True
+                )
+
+    # 입력창 — 예시 버튼 클릭 시 자동 채워지도록
+    prefill = st.session_state.pop("chatbot_input_prefill", "")
+    user_input = st.text_input(
+        "질문을 입력하세요",
+        value=prefill,
+        placeholder="예: 복합성 피부에 가장 잘 맞는 제품은?",
+        key="chatbot_text_input",
+        label_visibility="collapsed",
+    )
+
+    col_send, col_clear = st.columns([3, 1])
+    with col_send:
+        send_btn = st.button("전송 ➤", use_container_width=True, key="chatbot_send")
+    with col_clear:
+        if st.button("초기화", use_container_width=True, key="chatbot_clear"):
+            st.session_state["chat_history"] = []
+            st.rerun()
+
+    # ── 챗봇 컨텍스트 데이터 구성 (집계 수치만 전달 → 빠름·비용 절약) ──
+    @st.cache_data
+    def build_chatbot_context(_df, _trouble_df, _summary):
+        """
+        챗봇에게 넘길 데이터 컨텍스트를 미리 계산해두는 함수.
+        _df, _trouble_df 앞에 언더스코어(_)를 붙이면
+        Streamlit cache가 해시 계산을 건너뛰어 DataFrame도 캐시할 수 있음.
+        """
+        # 피부타입별 5점 만족도 (제품×피부타입)
+        skin_all = _df.groupby(['product', 'skinType']).size().reset_index(name='전체')
+        skin_5   = _df[_df['rating'] == 5].groupby(['product', 'skinType']).size().reset_index(name='5점')
+        skin_sat = skin_all.merge(skin_5, on=['product', 'skinType'], how='left').fillna(0)
+        skin_sat['5점비율'] = (skin_sat['5점'] / skin_sat['전체'] * 100).round(1)
+
+        # 피부고민별 5점 만족도 (제품×피부고민)
+        tr_all = _trouble_df.groupby(['product', 'skinTrouble']).size().reset_index(name='전체')
+        tr_5   = _trouble_df[_trouble_df['rating'] == 5].groupby(['product', 'skinTrouble']).size().reset_index(name='5점')
+        tr_sat = tr_all.merge(tr_5, on=['product', 'skinTrouble'], how='left').fillna(0)
+        tr_sat['5점비율'] = (tr_sat['5점'] / tr_sat['전체'] * 100).round(1)
+
+        ctx = f"""
+[분석 대상]
+올리브영 크림 카테고리 Top 10 제품의 실제 구매 리뷰 데이터 (총 {len(_df):,}건)
+
+[제품별 핵심 지표]
+{_summary[['product','리뷰수','평균평점','5점비율(%)','재구매율(%)','자극언급률(%)','가격만족도지수']].to_string(index=False)}
+
+[피부타입별 5점 만족도 상위 조합 (상위 30개)]
+{skin_sat.sort_values('5점비율', ascending=False).head(30)[['product','skinType','전체','5점비율']].to_string(index=False)}
+
+[피부고민별 5점 만족도 상위 조합 (상위 30개)]
+{tr_sat.sort_values('5점비율', ascending=False).head(30)[['product','skinTrouble','전체','5점비율']].to_string(index=False)}
+"""
+        return ctx
+
+    chatbot_context = build_chatbot_context(df, trouble_df, summary)
+
+    CHATBOT_SYSTEM = f"""
+너는 올리브영 크림 카테고리 리뷰 데이터 전문 분석가야.
+아래 [데이터]를 근거로만 답변하고, 데이터에 없는 내용은 "데이터에서 확인되지 않습니다"라고 솔직하게 말해.
+
+[데이터]
+{chatbot_context}
+
+[답변 규칙]
+1. 한국어로 친절하게, 3~5문장 이내로 간결하게.
+2. 반드시 수치(5점비율%, 재구매율%, 평균평점 등)를 근거로 제시.
+3. 제품명은 정확하게 그대로 표기.
+4. 별표(**)나 마크다운 제목(#) 사용 금지 — 사이드바에서 깨져 보임.
+5. 추천이 여러 개면 1위·2위·3위 형태로 나열.
+"""
+
+    # ── 전송 처리 ──
+    if send_btn and user_input.strip():
+        st.session_state["chat_history"].append({"role": "user", "content": user_input.strip()})
+
+        # 대화 히스토리를 API messages 형식으로 변환
+        api_messages = [{"role": "system", "content": CHATBOT_SYSTEM}]
+        for h in st.session_state["chat_history"]:
+            api_messages.append({"role": h["role"], "content": h["content"]})
+
+        with st.spinner("분석 중..."):
+            try:
+                chat_resp = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=api_messages,
+                    max_tokens=600,
+                )
+                answer = chat_resp.choices[0].message.content.strip()
+            except Exception as e:
+                answer = f"오류가 발생했습니다: {e}"
+
+        st.session_state["chat_history"].append({"role": "assistant", "content": answer})
+        st.rerun()
